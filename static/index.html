@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My Mind Map</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="topbar">
+  <button id="btnMaps" title="My maps">☰</button>
+  <input id="title" spellcheck="false" aria-label="Map title">
+  <span id="status">Loaded</span>
+  <div class="spacer"></div>
+  <div class="group">
+    <button id="btnUndo" title="Undo (Ctrl+Z)">↶</button>
+    <button id="btnRedo" title="Redo (Ctrl+Shift+Z)">↷</button>
+  </div>
+  <div class="group">
+    <button id="btnChild" title="Add child (Tab)">⤷ Child</button>
+    <button id="btnSibling" title="Add sibling (Enter)">↳ Sibling</button>
+    <button id="btnDelete" title="Delete (Del)">🗑</button>
+  </div>
+  <div class="group">
+    <button id="btnColor" title="Node color">🎨</button>
+    <button id="btnIcon" title="Node icon">😀</button>
+    <button id="btnNote" title="Note (Ctrl+Shift+N)">📝</button>
+    <button id="btnLink" title="Link (Ctrl+K)">🔗</button>
+    <button id="btnBold" title="Bold (Ctrl+B)"><b>B</b></button>
+    <button id="btnItalic" title="Italic (Ctrl+I)"><i>I</i></button>
+  </div>
+  <div class="group">
+    <button id="btnCollapseAll" title="Collapse all branches">⊟</button>
+    <button id="btnExpandAll" title="Expand all branches">⊞</button>
+  </div>
+  <div class="group">
+    <button id="btnZoomOut" title="Zoom out">−</button>
+    <button id="btnFit" title="Fit to screen (Ctrl+0)">⤢</button>
+    <button id="btnZoomIn" title="Zoom in">+</button>
+  </div>
+  <input id="search" type="search" placeholder="Search (Ctrl+F)" spellcheck="false">
+  <div class="group">
+    <button id="btnExport" title="Export">⬇ Export</button>
+    <button id="btnImport" title="Import a file">⬆ Import</button>
+    <button id="btnTheme" title="Toggle dark mode">🌓</button>
+    <button id="btnHelp" title="Keyboard shortcuts">?</button>
+  </div>
+</header>
+
+<aside id="drawer" hidden>
+  <div class="drawer-head"><strong>My maps</strong><button id="btnNewMap">＋ New map</button></div>
+  <ul id="mapList"></ul>
+</aside>
+
+<main id="viewport">
+  <div id="canvas"><svg id="edges" width="1" height="1"></svg><div id="nodes"></div></div>
+</main>
+
+<div id="popover" class="popover" hidden></div>
+<div id="toast" hidden></div>
+<input id="fileInput" type="file" accept=".json,.mup,.mm,.md,.txt" hidden>
+
+<dialog id="noteDialog">
+  <form method="dialog">
+    <h3>Note</h3>
+    <textarea id="noteText" rows="10" placeholder="Write a note for this node…"></textarea>
+    <div class="dialog-actions">
+      <button value="clear" type="submit">Remove</button>
+      <span class="spacer"></span>
+      <button value="cancel" type="submit">Cancel</button>
+      <button value="ok" type="submit" class="primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="helpDialog">
+  <form method="dialog">
+    <h3>Keyboard shortcuts</h3>
+    <table class="keys">
+      <tr><td><kbd>Tab</kbd> / <kbd>Insert</kbd></td><td>Add child</td></tr>
+      <tr><td><kbd>Enter</kbd></td><td>Add sibling (while editing: finish)</td></tr>
+      <tr><td><kbd>Shift</kbd>+<kbd>Enter</kbd></td><td>New line while editing</td></tr>
+      <tr><td><kbd>F2</kbd> / double-click</td><td>Edit text</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>Cancel editing / clear selection</td></tr>
+      <tr><td><kbd>Space</kbd></td><td>Collapse / expand</td></tr>
+      <tr><td><kbd>Delete</kbd> / <kbd>Backspace</kbd></td><td>Delete selected</td></tr>
+      <tr><td>Arrow keys</td><td>Navigate</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>↑</kbd>/<kbd>↓</kbd></td><td>Move node up / down among siblings</td></tr>
+      <tr><td><kbd>Shift</kbd>/<kbd>Ctrl</kbd>+click</td><td>Multi-select</td></tr>
+      <tr><td>Drag a node</td><td>Move (drop on a node = child, near its top/bottom edge = sibling)</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Y</kbd></td><td>Undo / redo</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>C</kbd>/<kbd>X</kbd>/<kbd>V</kbd></td><td>Copy / cut / paste branches (or paste a text outline)</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>B</kbd> / <kbd>I</kbd></td><td>Bold / italic</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>K</kbd></td><td>Set link</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd></td><td>Edit note</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>F</kbd></td><td>Search</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+wheel, <kbd>Ctrl</kbd>+<kbd>0</kbd></td><td>Zoom, fit to screen</td></tr>
+      <tr><td>Wheel / drag background</td><td>Pan</td></tr>
+    </table>
+    <div class="dialog-actions"><span class="spacer"></span><button class="primary" value="ok">Close</button></div>
+  </form>
+</dialog>
+<script src="app.js"></script>
+</body>
+</html>
