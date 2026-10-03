@@ -28,5 +28,13 @@ so you can also query your maps directly, e.g. `SELECT * FROM nodes WHERE note I
 ## Tests
 
 ```bash
-python3 -m unittest discover -s tests
+python3 -m unittest discover -s tests      # storage tests (+ browser tests if playwright is installed)
+pip install playwright                     # optional, for tests/test_e2e.py
+CHROMIUM_PATH=/path/to/chromium python3 -m unittest tests.test_e2e   # if Chromium isn't auto-found
 ```
+
+`tests/test_store.py` covers DuckDB persistence; `tests/test_e2e.py` starts the server on a free port with a
+temporary database and drives the real UI (create/undo/redo/reload, import, search).
+
+Manual smoke test: run the server, press **?** in the app, then try Tab/Enter/Space, drag a node onto another,
+Ctrl+Z, Export > PNG, restart the server and confirm the map is still there.
