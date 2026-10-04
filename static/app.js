@@ -3,6 +3,8 @@
 // ---------------------------------------------------------------- helpers
 const $ = (s) => document.querySelector(s);
 const uid = () => Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
+const SAFE_LINK = /^(https?:|mailto:)/i;
+const escXml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const BRANCH_COLORS = ['#e5484d', '#f08c00', '#2f9e44', '#1c7ed6', '#9c36b5', '#0c8599', '#d6336c', '#5c7cfa'];
 const FILL_COLORS = ['#ffffff', '#ffe3e3', '#ffe8cc', '#fff3bf', '#d3f9d8', '#c5f6fa', '#d0ebff', '#e5dbff', '#fcc2d7',
@@ -63,16 +65,10 @@ function reindex() {
   doc.root.children.forEach((c) => { if (c.side !== 'l' && c.side !== 'r') c.side = 'r'; });
 }
 
-function normalize(n) {
-  n.id = n.id || uid();
+function normalize(n, fresh = false) {
+  n.id = fresh ? uid() : n.id || uid();
   n.text = typeof n.text === 'string' ? n.text : '';
-  n.children = (n.children || []).map(normalize);
-  return n;
-}
-
-function freshIds(n) {
-  n.id = uid();
-  n.children.forEach(freshIds);
+  n.children = (n.children || []).map((c) => normalize(c, fresh));
   return n;
 }
 
@@ -168,8 +164,10 @@ function build() {
     if (sel.has(n.id)) el.classList.add('selected');
     if (matches.has(n.id)) el.classList.add('match');
     else if (searching) el.classList.add('dim');
-    if (n.color && info.parent) { el.style.background = n.color; el.style.color = contrastText(n.color); }
-    if (n.color && !info.parent) { el.style.background = n.color; el.style.borderColor = n.color; el.style.color = contrastText(n.color); }
+    if (n.color) {
+      el.style.background = n.color; el.style.color = contrastText(n.color);
+      if (!info.parent) el.style.borderColor = n.color;
+    }
     if (n.note) el.title = n.note.length > 300 ? n.note.slice(0, 300) + '…' : n.note;
 
     if (n.icon) { const i = document.createElement('span'); i.className = 'icon'; i.textContent = n.icon; el.append(i); }
@@ -177,7 +175,7 @@ function build() {
     t.className = 'text'; t.textContent = n.text;
     el.append(t);
     if (n.note) { const b = document.createElement('span'); b.className = 'badge'; b.dataset.act = 'note'; b.textContent = '📝'; el.append(b); }
-    if (n.link) {
+    if (n.link && SAFE_LINK.test(n.link)) {
       const a = document.createElement('a');
       a.className = 'badge'; a.dataset.act = 'link'; a.textContent = '🔗'; a.href = n.link;
       a.target = '_blank'; a.rel = 'noopener noreferrer'; a.title = n.link;
@@ -279,12 +277,17 @@ function viewportSize() {
   return { w: r.width, h: r.height };
 }
 
-function fit() {
+function bounds() {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const p of pos.values()) {
     x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y);
     x1 = Math.max(x1, p.x + p.w); y1 = Math.max(y1, p.y + p.h);
   }
+  return { x0, y0, x1, y1 };
+}
+
+function fit() {
+  const { x0, y0, x1, y1 } = bounds();
   const { w, h } = viewportSize();
   const pad = 60;
   view.s = Math.max(0.2, Math.min(1.2, Math.min((w - pad * 2) / (x1 - x0), (h - pad * 2) / (y1 - y0))));
@@ -345,11 +348,6 @@ function selectedRoots() {
     for (let p = index.get(id).parent; p; p = index.get(p.id).parent) if (sel.has(p.id)) return false;
     return true;
   });
-}
-
-function siblingsOf(id) {
-  const info = index.get(id);
-  return info.parent ? info.parent.children : [doc.root];
 }
 
 // ---------------------------------------------------------------- editing operations
@@ -614,7 +612,7 @@ function editLink() {
   const url = prompt('Link URL (leave empty to remove):', n.link || 'https://');
   if (url === null) return;
   const v = url.trim();
-  if (v && !/^(https?:|mailto:)/i.test(v)) return toast('Only http(s) and mailto links are supported');
+  if (v && !SAFE_LINK.test(v)) return toast('Only http(s) and mailto links are supported');
   setProp('link', v && v !== 'https://' ? v : null);
 }
 
@@ -645,12 +643,7 @@ function toMarkdown(root) {
   return out.join('\n') + '\n';
 }
 
-function toOutline(nodes) {
-  const out = [];
-  const walk = (n, d) => { out.push('  '.repeat(d) + '- ' + oneLine(n.text)); n.children.forEach((c) => walk(c, d + 1)); };
-  nodes.forEach((n) => walk(n, 0));
-  return out.join('\n');
-}
+const toOutline = (nodes) => toMarkdown({ text: '', children: nodes }).split('\n').slice(2).join('\n').trim();
 
 function parseOutline(text, title) {
   const lines = text.replace(/\r/g, '').split('\n').filter((l) => l.trim());
@@ -706,7 +699,7 @@ function fromFreeMind(xml) {
     const n = { text: e.getAttribute('TEXT') || '', children: [] };
     if (e.getAttribute('FOLDED') === 'true') n.collapsed = true;
     const bg = e.getAttribute('BACKGROUND_COLOR'); if (bg) n.color = bg;
-    const link = e.getAttribute('LINK'); if (link && /^(https?:|mailto:)/i.test(link)) n.link = link;
+    const link = e.getAttribute('LINK'); if (link && SAFE_LINK.test(link)) n.link = link;
     if (top) n.side = e.getAttribute('POSITION') === 'left' ? 'l' : 'r';
     for (const c of e.children) {
       if (c.tagName === 'node') n.children.push(conv(c, false));
@@ -725,7 +718,7 @@ function toMindMup(root, title) {
     if (n.color) attr.style = { background: n.color };
     if (n.note) attr.note = { index: 1, text: n.note };
     if (n.collapsed) attr.collapsed = true;
-    if (n.link) attr.attachment = { contentType: 'text/html', content: `<a href="${n.link}">${n.link}</a>` };
+    if (n.link) attr.attachment = { contentType: 'text/html', content: `<a href="${escXml(n.link)}">${escXml(n.link)}</a>` };
     return Object.keys(attr).length ? attr : undefined;
   };
   const conv = (n, rootLevel, counter) => {
@@ -781,11 +774,7 @@ async function importText(name, text) {
 
 function nodeSvgData() {
   // Build an SVG snapshot from the live DOM so exports look like the screen.
-  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  for (const p of pos.values()) {
-    x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y);
-    x1 = Math.max(x1, p.x + p.w); y1 = Math.max(y1, p.y + p.h);
-  }
+  const { x0, y0, x1, y1 } = bounds();
   const pad = 40, W = x1 - x0 + pad * 2, H = y1 - y0 + pad * 2;
   const ctx = document.createElement('canvas').getContext('2d');
   const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -819,7 +808,7 @@ function nodeSvgData() {
         `font-style="${tcs.fontStyle}">${esc(l)}</text>`;
     });
     const n = index.get(el.dataset.id).n;
-    if (n.icon) svg += `<text x="${p.x + 6}" y="${p.y + p.h / 2}" dominant-baseline="central" font-size="16">${n.icon}</text>`;
+    if (n.icon) svg += `<text x="${p.x + 6}" y="${p.y + p.h / 2}" dominant-baseline="central" font-size="16">${escXml(n.icon)}</text>`;
   }
   svg += '</g></svg>';
   return { svg, W, H };
@@ -997,14 +986,15 @@ viewportEl.addEventListener('pointerup', (e) => {
   if (d.kind === 'pan' && !d.moved) { sel = new Set([primary]); refreshSelection(); }
   if (d.kind === 'node') {
     if (d.active && d.target) moveNodes(selectedRoots(), d.target.id, d.target.mode, d.target.side);
-
-    else build();
+    else if (d.active) build(); // drag cancelled: clear drag styling; plain clicks keep the DOM so dblclick fires
   }
 });
 
 viewportEl.addEventListener('dblclick', (e) => {
-  const el = e.target.closest('.node');
-  if (el && !e.target.closest('[data-act]')) startEdit(el.dataset.id);
+  // pointer capture retargets dblclick to the viewport, so hit-test by position
+  const hit = document.elementFromPoint(e.clientX, e.clientY);
+  const el = hit?.closest('.node');
+  if (el && !hit.closest('[data-act]')) startEdit(el.dataset.id);
   else if (!el) { /* double-click on background: fit */ fit(); }
 });
 
@@ -1034,7 +1024,7 @@ document.addEventListener('paste', (e) => {
   if (editing || e.target.closest('input,textarea')) return;
   const text = e.clipboardData.getData('text/plain');
   let nodes;
-  if (internalClip && text === internalClip.text) nodes = clone(internalClip.nodes).map(freshIds);
+  if (internalClip && text === internalClip.text) nodes = clone(internalClip.nodes).map((n) => normalize(n, true));
   else if (text.trim()) {
     const parsed = parseOutline(text, '');
     nodes = parsed.text === '' ? parsed.children : [parsed];
@@ -1043,7 +1033,7 @@ document.addEventListener('paste', (e) => {
   e.preventDefault();
   const parent = index.get(primary).n;
   mutate(() => {
-    parent.collapsed = false; delete parent.collapsed;
+    delete parent.collapsed;
     nodes.forEach((n) => { if (parent === doc.root) n.side = pickSide(); else delete n.side; parent.children.push(n); });
     sel = new Set(nodes.map((n) => n.id)); primary = nodes[0].id;
   });
@@ -1067,19 +1057,18 @@ document.addEventListener('keydown', (e) => {
   if (tag === 'INPUT' || tag === 'TEXTAREA' || $('dialog[open]')) return;
   if (!doc) return;
 
-  if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
-  if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
-  if (mod && e.key.toLowerCase() === 'f') { e.preventDefault(); $('#search').focus(); $('#search').select(); return; }
-  if (mod && e.key.toLowerCase() === 'b') { e.preventDefault(); setProp('bold', !index.get(primary).n.bold); return; }
-  if (mod && e.key.toLowerCase() === 'i') { e.preventDefault(); setProp('italic', !index.get(primary).n.italic); return; }
-  if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); editLink(); return; }
-  if (mod && e.shiftKey && e.key.toLowerCase() === 'n') { e.preventDefault(); editNote(); return; }
-  if (mod && e.key === '0') { e.preventDefault(); fit(); return; }
-  if (mod && (e.key === '=' || e.key === '+')) { e.preventDefault(); zoomBtn(1.2); return; }
-  if (mod && e.key === '-') { e.preventDefault(); zoomBtn(1 / 1.2); return; }
-  if (mod && e.key === 'ArrowUp') { e.preventDefault(); moveSibling(-1); return; }
-  if (mod && e.key === 'ArrowDown') { e.preventDefault(); moveSibling(1); return; }
-  if (mod) return;
+  if (mod) {
+    const toggle = (key) => () => setProp(key, !index.get(primary).n[key]);
+    const act = {
+      z: () => (e.shiftKey ? redo() : undo()), y: redo,
+      f: () => { $('#search').focus(); $('#search').select(); },
+      b: toggle('bold'), i: toggle('italic'), k: editLink,
+      n: e.shiftKey && editNote, 0: fit, '=': () => zoomBtn(1.2), '+': () => zoomBtn(1.2), '-': () => zoomBtn(1 / 1.2),
+      arrowup: () => moveSibling(-1), arrowdown: () => moveSibling(1),
+    }[e.key.toLowerCase()];
+    if (act) { e.preventDefault(); act(); } // anything else (Ctrl+C/V/X…) is left to the browser
+    return;
+  }
 
   switch (e.key) {
     case 'Tab': case 'Insert': e.preventDefault(); addChild(); break;
@@ -1113,6 +1102,10 @@ $('#btnExpandAll').onclick = () => setAllCollapsed(false);
 $('#btnZoomIn').onclick = () => zoomBtn(1.2);
 $('#btnZoomOut').onclick = () => zoomBtn(1 / 1.2);
 $('#btnFit').onclick = fit;
+// click outside an open popover / maps drawer dismisses it (the toggle buttons handle themselves)
+document.addEventListener('pointerdown', (e) => {
+  if (!e.target.closest('#popover, #drawer, #topbar button')) { hidePopover(); $('#drawer').hidden = true; }
+});
 $('#btnExport').onclick = exportMenu;
 $('#btnImport').onclick = () => $('#fileInput').click();
 $('#btnHelp').onclick = () => $('#helpDialog').showModal();
@@ -1128,11 +1121,13 @@ $('#btnTheme').onclick = () => {
   try { localStorage.setItem('theme', dark ? 'dark' : 'light'); } catch (e) { /* ignore */ }
 };
 $('#search').addEventListener('input', runSearch);
-$('#fileInput').addEventListener('change', async (e) => {
+async function importFile(f) {
+  try { await importText(f.name, await f.text()); } catch (err) { toast('Import failed: ' + err.message); }
+}
+$('#fileInput').addEventListener('change', (e) => {
   const f = e.target.files[0];
   e.target.value = '';
-  if (!f) return;
-  try { await importText(f.name, await f.text()); } catch (err) { toast('Import failed: ' + err.message); }
+  if (f) importFile(f);
 });
 $('#title').addEventListener('input', (e) => {
   if (!doc) return;
@@ -1149,7 +1144,7 @@ document.addEventListener('drop', async (e) => {
   const f = e.dataTransfer?.files?.[0];
   if (!f) return;
   e.preventDefault();
-  try { await importText(f.name, await f.text()); } catch (err) { toast('Import failed: ' + err.message); }
+  importFile(f);
 });
 
 window.addEventListener('resize', () => { document.documentElement.style.setProperty('--topbar-h', $('#topbar').offsetHeight + 'px'); });

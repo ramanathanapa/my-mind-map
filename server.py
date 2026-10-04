@@ -6,7 +6,9 @@ import mimetypes
 import re
 import threading
 import time
+import traceback
 import uuid
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -41,6 +43,9 @@ CREATE TABLE IF NOT EXISTS nodes (
 );
 CREATE INDEX IF NOT EXISTS nodes_map_idx ON nodes (map_id);
 """
+
+
+NODE_PROPS = ("text", "color", "collapsed", "bold", "italic", "note", "link", "icon", "side")
 
 
 class NotFound(Exception):
@@ -84,10 +89,6 @@ class Store:
         self.lock = threading.Lock()
         self.con.execute(SCHEMA)
 
-    @staticmethod
-    def _ts(row):
-        return row.isoformat() if hasattr(row, "isoformat") else row
-
     def list_maps(self):
         with self.lock:
             rows = self.con.execute(
@@ -95,7 +96,7 @@ class Store:
                 "(SELECT count(*) FROM nodes n WHERE n.map_id = m.id) "
                 "FROM maps m ORDER BY m.updated_at DESC"
             ).fetchall()
-        return [{"id": r[0], "title": r[1], "updated_at": self._ts(r[2]), "node_count": r[3]} for r in rows]
+        return [{"id": r[0], "title": r[1], "updated_at": r[2].isoformat(), "node_count": r[3]} for r in rows]
 
     def get_map(self, map_id):
         with self.lock:
@@ -103,17 +104,13 @@ class Store:
             if not m:
                 raise NotFound(map_id)
             rows = self.con.execute(
-                "SELECT id, parent_id, text, color, collapsed, bold, italic, note, link, icon, side "
+                f"SELECT id, parent_id, {', '.join(NODE_PROPS)} "
                 "FROM nodes WHERE map_id = ? ORDER BY pos", [map_id]
             ).fetchall()
         by_id, links, root = {}, [], None
-        for (nid, parent, text, color, collapsed, bold, italic, note, link, icon, side) in rows:
-            node = {"id": nid, "text": text, "children": []}
-            for key, val in (("color", color), ("collapsed", collapsed or None), ("bold", bold or None),
-                             ("italic", italic or None), ("note", note), ("link", link),
-                             ("icon", icon), ("side", side)):
-                if val:
-                    node[key] = val
+        for nid, parent, *props in rows:
+            node = {"id": nid, "children": []}
+            node.update({k: v for k, v in zip(NODE_PROPS, props) if v or k == "text"})
             by_id[nid] = node
             if parent is None:
                 root = node
@@ -123,7 +120,7 @@ class Store:
             by_id[parent]["children"].append(node)
         if root is None:
             root = {"id": uuid.uuid4().hex[:12], "text": m[1], "children": []}
-        return {"id": m[0], "title": m[1], "updated_at": self._ts(m[2]), "root": root}
+        return {"id": m[0], "title": m[1], "updated_at": m[2].isoformat(), "root": root}
 
     def create_map(self, title, root=None):
         map_id = uuid.uuid4().hex[:12]
@@ -145,26 +142,28 @@ class Store:
                         [(title or "Untitled map"), now, map_id], replace=True)
         return {"id": map_id, "updated_at": now}
 
-    def _write(self, map_id, rows, map_sql, map_args, replace=False):
-        con = self.con
-        con.execute("BEGIN")
+    @contextmanager
+    def _tx(self):
+        self.con.execute("BEGIN")
         try:
+            yield self.con
+            self.con.execute("COMMIT")
+        except Exception:
+            self.con.execute("ROLLBACK")
+            raise
+
+    def _write(self, map_id, rows, map_sql, map_args, replace=False):
+        with self._tx() as con:
             if replace:
                 con.execute("DELETE FROM nodes WHERE map_id = ?", [map_id])
             con.execute(map_sql, map_args)
             if rows:
                 con.executemany("INSERT INTO nodes VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
-            con.execute("COMMIT")
-        except Exception:
-            con.execute("ROLLBACK")
-            raise
 
     def delete_map(self, map_id):
-        with self.lock:
-            self.con.execute("BEGIN")
-            self.con.execute("DELETE FROM nodes WHERE map_id = ?", [map_id])
-            self.con.execute("DELETE FROM maps WHERE id = ?", [map_id])
-            self.con.execute("COMMIT")
+        with self.lock, self._tx() as con:
+            con.execute("DELETE FROM nodes WHERE map_id = ?", [map_id])
+            con.execute("DELETE FROM maps WHERE id = ?", [map_id])
 
     def duplicate_map(self, map_id):
         src = self.get_map(map_id)
@@ -187,6 +186,14 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
 
+    def _host_ok(self):
+        # blocks DNS-rebinding: only answer requests addressed to a loopback name
+        return urlparse("//" + self.headers.get("Host", "")).hostname in ("127.0.0.1", "localhost", "::1", self.server.bind_host)
+
+    def end_headers(self):
+        self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'")
+        super().end_headers()
+
     def _json(self, status, payload):
         body = json.dumps(payload).encode()
         self.send_response(status)
@@ -197,7 +204,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _body(self):
-        length = int(self.headers.get("Content-Length") or 0)
+        if "application/json" not in self.headers.get("Content-Type", ""):
+            raise BadRequest("Content-Type must be application/json")
+        length = max(0, int(self.headers.get("Content-Length") or 0))
         if length > MAX_BODY:
             raise BadRequest("body too large")
         try:
@@ -237,8 +246,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json(404, {"error": "map not found"})
         except BadRequest as e:
             self._json(400, {"error": str(e)})
-        except Exception as e:  # keep the server alive on unexpected errors
-            self._json(500, {"error": str(e)})
+        except Exception:  # keep the server alive on unexpected errors
+            traceback.print_exc()
+            self._json(500, {"error": "internal error"})
 
     def _static(self):
         rel = unquote(urlparse(self.path).path).lstrip("/") or "index.html"
@@ -254,16 +264,16 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
+        if not self._host_ok():
+            return self._json(403, {"error": "forbidden host"})
         self._api("GET") if self.path.startswith("/api/") else self._static()
 
     def do_POST(self):
-        self._api("POST")
+        if not self._host_ok():
+            return self._json(403, {"error": "forbidden host"})
+        self._api(self.command)
 
-    def do_PUT(self):
-        self._api("PUT")
-
-    def do_DELETE(self):
-        self._api("DELETE")
+    do_PUT = do_DELETE = do_POST
 
 
 def main():
@@ -273,7 +283,10 @@ def main():
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
     Handler.store = Store(args.db)
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        print("WARNING: no authentication; anyone who can reach this address can read and edit your maps.")
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
+    httpd.bind_host = args.host
     print(f"Mind map running at http://{args.host}:{args.port}  (database: {args.db})")
     try:
         httpd.serve_forever()
